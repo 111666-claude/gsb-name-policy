@@ -1,12 +1,9 @@
-"""角色名策略：字符集与长度规则、保留名、占用台账与改名冷却。
-
-缺陷：不校验字符集、不拦保留名、不拦纯数字、占用不检查（同名可被覆盖）、
-改名冷却不生效、每次校验扫描全部已占用名字。
-"""
+"""角色名策略：字符集与长度规则、保留名、占用台账与改名冷却。"""
 
 import re
 
-ALLOWED = re.compile(r"^[A-Za-z0-9_\u4e00-\u9fff]+$")
+ALLOWED = re.compile(r"^[A-Za-z0-9_一-鿿]+$")
+DIGITS = re.compile(r"^[0-9]+$")
 
 
 class Registry:
@@ -24,18 +21,27 @@ class Registry:
 
     def check(self, name):
         """校验名字格式，返回 ok 或 error:xxx。"""
-        self.scanned += len(self.names)
         if len(name) < self.min_len or len(name) > self.max_len:
             return "error:length"
+        if not ALLOWED.match(name):
+            return "error:charset"
+        if DIGITS.match(name):
+            return "error:digits"
+        if name in self.reserved:
+            return "error:reserved"
         return "ok"
 
     def claim(self, name, player, req_id, now_ms):
         """占用一个名字。"""
         if req_id in self.reqs:
             return self.reqs[req_id]
-        self.names[name] = player
-        self.reqs[req_id] = True
-        return True
+        result = self.check(name) == "ok" and (
+            self.names.get(name) in (None, player)
+        )
+        if result:
+            self.names[name] = player
+        self.reqs[req_id] = result
+        return result
 
     def release(self, player, now_ms):
         """释放该玩家占用的名字。"""
@@ -48,9 +54,18 @@ class Registry:
         """改名。"""
         if req_id in self.reqs:
             return self.reqs[req_id]
-        self.names[name] = player
-        self.reqs[req_id] = True
-        return True
+        last = self.last_rename.get(player)
+        result = (
+            self.check(name) == "ok"
+            and (last is None or now_ms - last >= self.cooldown_ms)
+            and self.names.get(name) in (None, player)
+        )
+        if result:
+            self.release(player, now_ms)
+            self.names[name] = player
+            self.last_rename[player] = now_ms
+        self.reqs[req_id] = result
+        return result
 
     def owner(self, name):
         return self.names.get(name)
